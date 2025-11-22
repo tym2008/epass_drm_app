@@ -14,6 +14,11 @@
 #include "vdecoder.h"           //* video decode library in "libcedarc/include/"
 #include "memoryAdapter.h"
 
+
+#define VIDEO_FILE_NAME "video.mjpeg"
+#define OVERLAY_FILE_NAME "overlay.png"
+
+
  #define DRM_FORMAT_MOD_VENDOR_ALLWINNER 0x09
 #define fourcc_mod_code(vendor,val) ((((__u64) DRM_FORMAT_MOD_VENDOR_ ##vendor) << 56) | ((val) & 0x00ffffffffffffffULL))
 #define DRM_FORMAT_MOD_ALLWINNER_TILED fourcc_mod_code(ALLWINNER, 1)
@@ -110,7 +115,7 @@ static inline int DRM_IOCTL(int fd, unsigned long cmd, void *arg)
     
  }
 
- void yuvmb32_2_rgb565(int width, int height, uint16_t* out, uint8_t* luma, uint8_t* chroma1,uint8_t* chroma2){
+ void yuvmb32_2_rgb565(int width, int height, uint16_t* out, uint8_t* luma, uint8_t* chroma){
     int i = 0;
     for (int y = 0; y < height; y++)
     {
@@ -118,8 +123,8 @@ static inline int DRM_IOCTL(int fd, unsigned long cmd, void *arg)
      {
        int cy = y / 2;
        int Y = *((uint8_t*)(luma + (x / 32) * 1024 + (x % 32) + ((y % 32) * 32) + ((y / 32) * (((width + 31) / 32) * 1024))));
-       int Cb = *((uint8_t*)(chroma1 + (x / 32) * 1024 + ((x % 32) / 2 * 2) + ((cy % 32) * 32) + ((cy / 32) * (((width + 31) / 32) * 1024)))) - 128;
-       int Cr = *((uint8_t*)(chroma2 + (x / 32) * 1024 + ((x % 32) / 2 * 2) + ((cy % 32) * 32) + ((cy / 32) * (((width + 31) / 32) * 1024)))) - 128;
+       int Cb = *((uint8_t*)(chroma + (x / 32) * 1024 + ((x % 32) / 2 * 2) + ((cy % 32) * 32) + ((cy / 32) * (((width + 31) / 32) * 1024)))) - 128;
+       int Cr = *((uint8_t*)(chroma + (x / 32) * 1024 + ((x % 32) / 2 * 2 + 1) + ((cy % 32) * 32) + ((cy / 32) * (((width + 31) / 32) * 1024)))) - 128;
        int R = Y + 359 * Cr / 256; //1.402 * Cr;
        int G = Y - 88 * Cb / 256 - 2925 * Cr / 4096;//0.344136 * Cb - 0.714136 * Cr;
        int B = Y + 3629 * Cb / 2048; //1.772 * Cb;
@@ -482,7 +487,33 @@ uint32_t* parse_mjpeg_frame_locs(int fd, int *frame_count){
     return frame_locs;
 }
 
+uint32_t read_mjpeg_frame_loc_from_file(int fd, int* frame_count){
+    uint32_t* frame_locs = malloc(MAX_SUPPORT_FRAME * sizeof(uint32_t));
+    
+    int filelen = lseek(fd, 0, SEEK_END);
+    lseek(fd, 0, SEEK_SET);
 
+    *frame_count = 0;
+
+    char linebuf[100];
+    char* buf = malloc(filelen);
+    read(fd, buf, filelen);
+    
+    int lastlinestart = 0;
+
+    for(int i = 0; i < filelen; i++){
+        if(buf[i] == '\n'){
+            memcpy(linebuf, buf + lastlinestart, i - lastlinestart);
+            linebuf[i - lastlinestart] = '\0';
+            frame_locs[*frame_count] = atoi(linebuf);
+            (*frame_count)++;
+            lastlinestart = i + 1;
+        }
+    }
+
+    free(buf);
+    return frame_locs;
+}
 
 int x;
 void update_overlay_plane(){
@@ -553,11 +584,26 @@ int is_first_frame = 1;
     lseek(decfd, 0, SEEK_SET);
 
     int frame_count = 0;
-    uint32_t* frame_locs = parse_mjpeg_frame_locs(decfd, &frame_count);
-    if(frame_locs == NULL){
-        printf("parse frame locs failed\n");
+
+    char frame_filename[100];
+    sprintf(frame_filename, "%s.txt", filename);
+    int frame_fd = open(frame_filename,O_RDONLY);
+    if(frame_fd < 0) {
+        printf("open %s failed\n",frame_filename);
         return -1;
     }
+    uint32_t* frame_locs = read_mjpeg_frame_loc_from_file(frame_fd, &frame_count);
+    if(frame_locs == NULL){
+        printf("read frame locs failed\n");
+        return -1;
+    }
+    close(frame_fd);
+
+    // uint32_t* frame_locs = parse_mjpeg_frame_locs(decfd, &frame_count);
+    // if(frame_locs == NULL){
+    //     printf("parse frame locs failed\n");
+    //     return -1;
+    // }
 
     char *buf, *ringBuf;
     int buflen, ringBufLen;
@@ -642,7 +688,7 @@ int is_first_frame = 1;
         ret = DecodeVideoStream(decoder, endofstream, decodekeyframeonly,
                             dropBFrameifdelay, currenttimeus);
         
-        print_vdecode_status(ret);
+        // print_vdecode_status(ret);
         switch (ret)
         {
             case VDECODE_RESULT_KEYFRAME_DECODED:
@@ -672,11 +718,10 @@ int is_first_frame = 1;
                     // memcpy(outbuf+nwidth*nheight,videoPicture->pData1,nwidth*nheight/4);
                     // memcpy(outbuf+nwidth*nheight*5/4,videoPicture->pData2,nwidth*nheight/4);
 
-                    // memcpy(chroma_buf,videoPicture->pData1,nwidth*nheight/4);
-                    // memcpy(chroma_buf+nwidth*nheight/4,videoPicture->pData2,nwidth*nheight/4);
+                    memcpy(chroma_buf,videoPicture->pData1,nwidth*nheight/4);
+                    memcpy(chroma_buf+nwidth*nheight/4,videoPicture->pData2,nwidth*nheight/4);
 
-                    // yuvmb32_2_rgb565(nwidth, nheight, outbuf, videoPicture->pData0, chroma_buf);
-                    yuvmb32_2_rgb565(nwidth, nheight, outbuf, videoPicture->pData0, videoPicture->pData1, videoPicture->pData2);
+                    yuvmb32_2_rgb565(nwidth, nheight, outbuf, videoPicture->pData0, chroma_buf);
                     
                     // printf("returning picture to video decoder\n");
                         /**return the picture buf to video decoder**/
@@ -820,7 +865,7 @@ int main(int argc, char **argv)
     // free(inbuf);
 
     ret = drmModeSetPlane(fd, plane_res->planes[0], crtc_id, plane_buf[0].fb_id, 0,
-            8, 0, plane_buf[0].width,plane_buf[0].height,
+            4, 0, plane_buf[0].width,plane_buf[0].height,
             0, 0, (plane_buf[0].width) << 16, (plane_buf[0].height) << 16);
     if(ret < 0)
         printf("drmModeSetPlane err %d\n",ret);  
@@ -835,7 +880,7 @@ int main(int argc, char **argv)
     //  modeset_create_fb(fd, &plane_buf[1]);
     //  write_color(&plane_buf[1],0x00ff0000);
 
-    img_data= load_image_BGRA8888("infotest.png",&img_width,&img_height);
+    img_data= load_image_BGRA8888(OVERLAY_FILE_NAME,&img_width,&img_height);
     printf("img_width %d,img_height %d\n",img_width,img_height);
 
     plane_buf[1].width = img_width;
@@ -852,14 +897,14 @@ int main(int argc, char **argv)
     free(img_data);
 
      ret = drmModeSetPlane(fd, plane_res->planes[1], crtc_id, plane_buf[1].fb_id, 0,
-             0, 640 - img_height, plane_buf[1].width,plane_buf[1].height,
+             (360 - img_width) / 2, 10, plane_buf[1].width,plane_buf[1].height,
              0, 0, (plane_buf[1].width) << 16, (plane_buf[1].height) << 16);
      if(ret < 0)
          printf("drmModeSetPlane err %d\n",ret);
 
-    getchar();
+    // getchar();
 
-    video_playback_loop("mostima.mjpg", plane_buf[0].vaddr);
+    video_playback_loop(VIDEO_FILE_NAME, plane_buf[0].vaddr);
  
     //  ret = drmModeSetPlane(fd, plane_res->planes[1], crtc_id, plane_buf[1].fb_id, 0,
     //          0, 0, plane_buf[1].width,plane_buf[1].height,
@@ -868,7 +913,7 @@ int main(int argc, char **argv)
     //      printf("drmModeSetPlane err %d\n",ret);
     
 
- 
+  
     //  printf("overlay2\n");
     //  // -------------------  overlay 2
     //  plane_buf[2].width = 200;
