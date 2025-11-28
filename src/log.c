@@ -102,7 +102,7 @@
  }
  
  
- void log_set_level(int level) {
+ void log_set_level_c(int level) {
    L.level = level;
  }
  
