@@ -18,7 +18,7 @@ extern void set_switch_mode(sw_mode_t mode);
 extern void next_video();
 extern void prev_video();
 extern void enter_usb_download();
-
+extern bool ui_blocked();
 
 
 long long get_now_us(void)
@@ -110,9 +110,47 @@ static void ui_draw_display_pic(ui_t *ui){
     }
 }
 
+static void ui_load_config(ui_t *ui){
+    FILE *f = fopen(UI_CONFIG_FILE_PATH, "rb");
+    ui_epass_config_t config;
+    if(f == NULL){
+        log_error("failed to open config file");
+        return;
+    }
+    fread(&config, sizeof(ui_epass_config_t), 1, f);
+    if(config.magic != UI_CONFIG_MAGIC){
+        log_error("invalid config file");
+        return;
+    }
+    if(config.version != UI_CONFIG_VERSION){
+        log_error("invalid config file version");
+        return;
+    }
+    ui->brightness = config.brightness;
+    ui->switch_interval = config.switch_interval;
+    ui->switch_mode = config.switch_mode;
+    set_brightness(config.brightness);
+    set_switch_interval(config.switch_interval);
+    set_switch_mode(config.switch_mode);
+    fclose(f);
+}
+
+
+static void ui_save_config(ui_t *ui){
+    FILE *f = fopen(UI_CONFIG_FILE_PATH, "wb");
+    ui_epass_config_t config;
+    config.magic = UI_CONFIG_MAGIC;
+    config.version = UI_CONFIG_VERSION;
+    config.brightness = ui->brightness;
+    config.switch_interval = ui->switch_interval;
+    config.switch_mode = ui->switch_mode;
+    fwrite(&config, sizeof(ui_epass_config_t), 1, f);
+    fclose(f);
+}
+
 static void ui_handle_key(ui_t *ui, int key){
 
-    if(ui->transition_state != TRANSITION_NONE){
+    if(ui->transition_state != TRANSITION_NONE || ui_blocked()){
         return;
     }
 
@@ -164,11 +202,13 @@ static void ui_handle_key(ui_t *ui, int key){
                 if (ui->brightness < 10) {
                     ui->brightness++;
                     set_brightness(ui->brightness);
+                    ui_save_config(ui);
                 }
             } else if (key == KEY_2) {
                 if (ui->brightness > 0) {
                     ui->brightness--;
                     set_brightness(ui->brightness);
+                    ui_save_config(ui);
                 }
             } else if (key == KEY_3 || key == KEY_4) {
                 ui->state = UI_STATE_MAINMENU;
@@ -184,6 +224,7 @@ static void ui_handle_key(ui_t *ui, int key){
             } else if (key == KEY_3) {
                 ui->switch_interval = ui->hover_index;
                 set_switch_interval(ui->switch_interval);
+                ui_save_config(ui);
                 ui->state = UI_STATE_MAINMENU;
                 ui->hover_index = 1;
             } else if (key == KEY_4) {
@@ -200,6 +241,7 @@ static void ui_handle_key(ui_t *ui, int key){
             } else if (key == KEY_3) {
                 ui->switch_mode = ui->hover_index;
                 set_switch_mode(ui->switch_mode);
+                ui_save_config(ui);
                 ui->state = UI_STATE_MAINMENU;
                 ui->hover_index = 2;
             } else if (key == KEY_4) {
@@ -215,16 +257,22 @@ static void ui_handle_key(ui_t *ui, int key){
     }
 }
 
+static void ui_fire_transition_middle_cb(ui_t *ui){
+    for(int i = 0; i < UI_TRANSITION_MIDDLE_CB_COUNT; i++){
+        if(ui->transition_middle_cb[i] != NULL){
+            ui->transition_middle_cb[i]();
+            ui->transition_middle_cb[i] = NULL;
+        }
+    }
+}
+
 static void ui_transition_tick(ui_t *ui){
     if(ui->transition_state == TRANSITION_FILL_LEFT_RIGHT){
         for(int i = 0; i < UI_WIDTH; i++){
             fbdraw_fill_rect(ui->drawer, i, 0, 1, UI_HEIGHT, UI_TEXT_COLOR);
             usleep(UI_TRANSITION_LINE_SLEEP);
         }
-        if(ui->transition_middle_cb != NULL){
-            ui->transition_middle_cb();
-            ui->transition_middle_cb = NULL;
-        }
+        ui_fire_transition_middle_cb(ui);
         usleep(UI_TRANSITION_HOLD_TIME);
         for(int i = 0; i < UI_WIDTH; i++){
             fbdraw_fill_rect(ui->drawer, i, 0, 1, UI_HEIGHT, 0x00000000);
@@ -249,18 +297,14 @@ static void ui_transition_tick(ui_t *ui){
             }
             usleep(UI_TRANSITION_ROW_SLEEP);
         }
-        if(ui->transition_middle_cb != NULL){
-            ui->transition_middle_cb();
-            ui->transition_middle_cb = NULL;
-        }
-        usleep(UI_TRANSITION_HOLD_TIME * 3);
+        ui_fire_transition_middle_cb(ui);
+        usleep(UI_TRANSITION_LOGO_HOLD_TIME);
         for(int i = 0; i < UI_HEIGHT; i++){
             fbdraw_fill_rect(ui->drawer, 0, i, UI_WIDTH, 1, 0x00000000);
-            usleep(UI_TRANSITION_ROW_SLEEP * 3);
+            usleep(UI_TRANSITION_ROW_SLEEP);
         }
     }
     else if(ui->transition_state == TRANSITION_OPERATOR_INFO){
-        log_info("op info trans");
         fbdraw_argb_bitmap_from_file_with_delay(
             ui->drawer, 0, 0, 
             UI_OPERATOR_INFO_WIDTH, UI_OPERATOR_INFO_HEIGHT, 
@@ -328,6 +372,8 @@ void ui_init(ui_t *ui, int width, int height, uint32_t *vaddr, drm_warpper_t *dr
     ui->transition_state = TRANSITION_NONE;
     ui->transition_start_time = 0;
     ui->drm_warpper = drm_warpper;
+
+    ui_load_config(ui);
 }
 
 void ui_tick(ui_t *ui){
@@ -391,6 +437,12 @@ void ui_set_transition_bitmap_path(ui_t *ui,char *path){
 void ui_set_operator_info_path(ui_t *ui,char *path){
     strncpy(ui->operator_info_path, path, sizeof(ui->operator_info_path));
 }
-void ui_set_transition_middle_cb(ui_t *ui,void (*cb)(void)){
-    ui->transition_middle_cb = cb;
+void ui_add_transition_middle_cb(ui_t *ui,void (*cb)(void)){
+    for(int i = 0; i < UI_TRANSITION_MIDDLE_CB_COUNT; i++){
+        if(ui->transition_middle_cb[i] == NULL){
+            ui->transition_middle_cb[i] = cb;
+            return;
+        }
+    }
+    log_error("transition middle cb count exceeded");
 }

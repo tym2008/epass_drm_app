@@ -33,6 +33,14 @@ typedef enum {
 } transition_state_t;
 
 typedef struct {
+    uint64_t magic; // EPASCONF
+    uint32_t version;
+    int brightness;
+    sw_interval_t switch_interval;
+    sw_mode_t switch_mode;
+} ui_epass_config_t;
+
+typedef struct {
     fbdraw_t *drawer;
     CRREFont *font;
     ui_state_t state;
@@ -48,7 +56,7 @@ typedef struct {
     drm_warpper_t *drm_warpper;
     char transition_bitmap_path[128];
     char operator_info_path[128];
-    void (*transition_middle_cb)(void);
+    void (*transition_middle_cb[UI_TRANSITION_MIDDLE_CB_COUNT])(void);
 } ui_t;
 
 void ui_init(ui_t *ui,int width,int height,uint32_t* vaddr,drm_warpper_t *drm_warpper);
@@ -58,4 +66,4 @@ void ui_process_input(ui_t *ui);
 void ui_start_transition(ui_t *ui,transition_state_t state);
 void ui_set_transition_bitmap_path(ui_t *ui,char *path);
 void ui_set_operator_info_path(ui_t *ui,char *path);
-void ui_set_transition_middle_cb(ui_t *ui,void (*cb)(void));
+void ui_add_transition_middle_cb(ui_t *ui,void (*cb)(void));

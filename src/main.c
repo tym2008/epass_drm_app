@@ -16,9 +16,6 @@ static ui_t g_ui;
 static prts_t g_prts;
 
 static int g_running = 1;
-static sw_interval_t g_switch_interval = SW_INTERVAL_3MIN;
-static sw_mode_t g_switch_mode = SW_MODE_SEQUENCE;
-
 void signal_handler(int sig)
 {
     log_info("received signal %d, shutting down", sig);
@@ -45,11 +42,11 @@ void prev_video(){
 }
 
 void set_switch_interval(sw_interval_t interval){
-    g_switch_interval = interval;
+    g_prts.sw_interval = interval;
 }
 
 void set_switch_mode(sw_mode_t mode){
-    g_switch_mode = mode;
+    g_prts.sw_mode = mode;
 }
 
 void enter_usb_download(){
@@ -58,6 +55,26 @@ void enter_usb_download(){
 
 void init_transition_middle_cb(){
     drm_warpper_set_layer_position(&g_drm_warpper, DRM_WARPPER_LAYER_VIDEO, 4, 0);
+}
+
+void prts_transition_play_loop_middle_cb(){
+    char pathbuf[128];
+    snprintf(pathbuf, 128, "%s/%s", g_prts.operator_entries[g_prts.current_operator_index]->path, PRTS_LOOP_VIDEO_FILENAME);
+    mediaplayer_stop(&g_mediaplayer);
+    mediaplayer_set_video(&g_mediaplayer, pathbuf);
+    mediaplayer_start(&g_mediaplayer);
+}
+
+void prts_transition_play_intro_middle_cb(){
+    char pathbuf[128];
+    snprintf(pathbuf, 128, "%s/%s", g_prts.operator_entries[g_prts.current_operator_index]->path, PRTS_INTRO_VIDEO_FILENAME);
+    mediaplayer_stop(&g_mediaplayer);
+    mediaplayer_set_video(&g_mediaplayer, pathbuf);
+    mediaplayer_start(&g_mediaplayer);
+}
+
+bool ui_blocked(){
+    return g_prts.status != PRTS_STATUS_IDLE;
 }
 
 int main(int argc, char *argv[]){
@@ -112,8 +129,8 @@ int main(int argc, char *argv[]){
 
     // mediaplayer_play_video(&g_mediaplayer, "/root/out.mp4",video_vaddr);
     mediaplayer_set_output_buffer(&g_mediaplayer, video_vaddr);
-    ui_init(&g_ui, UI_WIDTH, UI_HEIGHT, ui_addr, &g_drm_warpper);
-    ui_set_transition_middle_cb(&g_ui, init_transition_middle_cb);
+    ui_init(&g_ui, UI_WIDTH, UI_HEIGHT, (uint32_t*)ui_addr, &g_drm_warpper);
+    ui_add_transition_middle_cb(&g_ui, init_transition_middle_cb);
 
     prts_next_operator(&g_prts);
     

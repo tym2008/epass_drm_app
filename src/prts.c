@@ -19,6 +19,8 @@ void prts_init(prts_t *prts,ui_t *ui,mediaplayer_t *mp){
     prts->change_start_time = 0;
     memset(prts->operator_entries, 0, sizeof(prts->operator_entries));
     prts->operator_entries_count = 0;
+    prts->sw_interval = SW_INTERVAL_5MIN;
+    prts->sw_mode = SW_MODE_SEQUENCE;
 }
 
 static operator_entry_t* load_operator_entry(char *path){
@@ -90,8 +92,8 @@ void prts_prev_operator(prts_t *prts){
     prts->last_change_time = get_now_us();
 }
 
-
-
+extern void prts_transition_play_loop_middle_cb();
+extern void prts_transition_play_intro_middle_cb();
 
 void prts_tick(prts_t *prts){
     char pathbuf[128];
@@ -100,10 +102,7 @@ void prts_tick(prts_t *prts){
     if(prts->status == PRTS_STATUS_INTRO_VIDEO){
         if(now - prts->change_start_time > PRTS_INTRO_VIDEO_DURATION){
             prts->status = PRTS_STATUS_LOOP_START;
-            snprintf(pathbuf, sizeof(pathbuf), "%s/%s", prts->operator_entries[prts->current_operator_index]->path, PRTS_LOOP_VIDEO_FILENAME);
-            mediaplayer_stop(prts->mp);
-            mediaplayer_set_video(prts->mp, pathbuf);
-            mediaplayer_start(prts->mp);
+            ui_add_transition_middle_cb(prts->ui, prts_transition_play_loop_middle_cb);
             ui_start_transition(prts->ui, TRANSITION_FILL_LEFT_RIGHT);
             prts->last_change_time = now;
         }
@@ -191,21 +190,16 @@ void prts_tick(prts_t *prts){
     else{
         ui_set_transition_bitmap_path(prts->ui, PRTS_FALLBACK_INTRO_LOGO_PATH);
     }
-    ui_start_transition(prts->ui, TRANSITION_FILL_TOP_BOTTOM);
 
     if(entry->has_intro_video){
         prts->status = PRTS_STATUS_INTRO_VIDEO;
-        snprintf(pathbuf, sizeof(pathbuf), "%s/%s", entry->path, PRTS_INTRO_VIDEO_FILENAME);
-        mediaplayer_stop(prts->mp);
-        mediaplayer_set_video(prts->mp, pathbuf);
-        mediaplayer_start(prts->mp);
+        ui_add_transition_middle_cb(prts->ui, prts_transition_play_intro_middle_cb);
     }
     else{
         prts->status = PRTS_STATUS_LOOP_START;
-        snprintf(pathbuf, sizeof(pathbuf), "%s/%s", entry->path, PRTS_LOOP_VIDEO_FILENAME);
-        mediaplayer_stop(prts->mp);
-        mediaplayer_set_video(prts->mp, pathbuf);
-        mediaplayer_start(prts->mp);
-        ui_start_transition(prts->ui, TRANSITION_FILL_LEFT_RIGHT);
+        ui_add_transition_middle_cb(prts->ui, prts_transition_play_loop_middle_cb);
     }
+
+    ui_start_transition(prts->ui, TRANSITION_FILL_TOP_BOTTOM);
+
 }
